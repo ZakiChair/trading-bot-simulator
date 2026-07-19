@@ -1,0 +1,28 @@
+{
+  "theme": "ember",
+  "panels": {
+    "status_strip": true,
+    "price_chart": true,
+    "scenario_dist": true,
+    "scenario_bubbles": true,
+    "scenario_table": true,
+    "scenario_heatmap": true,
+    "brain": true,
+    "prob_models": true,
+    "metrics": true,
+    "equity_chart": false,
+    "learning_chart": true,
+    "trades": false,
+    "log": true,
+    "controls": true
+  },
+  "layout_preset": "custom",
+  "tick_speed": 0.1,
+  "show_footer_hints": true,
+  "chart_height": 12,
+  "asset": "ETH/USDT",
+  "timeframe": "15m",
+  "price_chart_style": "candles",
+  "exchange_mode": "paper",
+  "boogie_size_idx": 2
+}

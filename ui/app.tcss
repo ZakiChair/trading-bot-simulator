@@ -1,0 +1,289 @@
+/* Probabilistic Trading Bot Simulator — dashboard layout */
+
+Screen {
+    background: $background;
+}
+
+Header {
+    background: $surface;
+    color: $foreground;
+    text-style: bold;
+    border-bottom: heavy $primary;
+    height: 1;
+}
+
+Footer {
+    background: $surface;
+    color: $foreground;
+}
+
+#status-strip {
+    display: block;
+    height: 1;
+    background: $panel;
+    color: $foreground;
+    content-align: left middle;
+    padding: 0 1;
+    border-bottom: tall $primary 30%;
+    text-overflow: ellipsis;
+    overflow: hidden;
+}
+#status-strip.hidden { display: none; }
+
+#body {
+    height: 1fr;
+    padding: 0 1;
+}
+
+#info-bar {
+    display: block;
+    height: 1;
+    background: $surface;
+    color: $foreground;
+    content-align: left middle;
+    padding: 0 1;
+    text-overflow: ellipsis;
+    overflow: hidden;
+}
+#info-bar.hidden { display: none; }
+
+#center {
+    width: 1fr;
+    min-width: 36;
+    height: 1fr;
+    padding: 0;
+    background: $background;
+}
+
+#main-tabs {
+    height: 1fr;
+    border: round $primary;
+    background: $panel;
+    padding: 0;
+}
+
+/* ContentTabs already renders its own Underline separator — do NOT add a
+   second border-bottom here or the frame shows a doubled, offset line. */
+#main-tabs > ContentTabs {
+    dock: top;
+    height: 2;
+    background: $surface;
+    padding: 0 1;
+}
+
+#main-tabs > ContentSwitcher {
+    height: 1fr;
+    /* No bottom padding — it was a wasted blank row under every tab's content. */
+    padding: 0 1;
+    background: $panel;
+}
+
+/* Tab labels: inactive tabs stay clearly legible (was 60% foreground, which
+   washed out on the cute theme's rose chrome); the active tab gets a filled
+   accent pill so it reads at a glance on any theme. */
+Tab {
+    color: $foreground 85%;
+    height: 1;
+    padding: 0 2;
+    text-style: bold;
+}
+Tab:hover {
+    color: $foreground;
+    background: $boost;
+}
+Tab.-active {
+    color: $background;
+    background: $primary;
+    text-style: bold;
+}
+#main-tabs > ContentTabs Underline > .underline--bar {
+    color: $primary;
+    background: $surface;
+}
+TabPane {
+    padding: 0;
+    height: 1fr;
+    overflow: hidden;
+}
+
+#tab-market-layout {
+    height: 1fr;
+    layout: vertical;
+}
+
+/* Apprentissage tab: the loss curve fills the upper area, the honesty panel
+   sits beneath it with a bounded height (so the tab carries both the "how it
+   learned" curve and the "what it can/can't do" verdict, never half-blank). */
+#tab-learning-layout {
+    height: 1fr;
+    layout: vertical;
+}
+#tab-learning-layout LearningChart, #tab-learning-layout #learning-chart {
+    height: 1fr;
+    min-height: 8;
+}
+#honesty-panel {
+    height: auto;
+    min-height: 11;
+    max-height: 18;
+    width: 1fr;
+    overflow-y: auto;
+    margin: 1 0 0 0;
+}
+#honesty-panel.hidden { display: none; }
+
+/* Price chart: compact and fixed — panels stack directly beneath it on the
+   Marché tab, so it keeps a bounded height and NO bottom margin (the gap to the
+   scrolling panels below was a wasted blank row). */
+PriceChart, #price-chart {
+    height: 11;
+    max-height: 11;
+    min-height: 11;
+    width: 1fr;
+    /* Same border treatment as .panel-box so every framed widget inside a tab
+       is visually harmonised (one consistent palette, not accent vs primary). */
+    border: round $primary 40%;
+    border-title-color: $primary;
+    border-title-align: left;
+    background: $panel;
+    padding: 0 1;
+    margin: 0;
+}
+/* Equity & Learning are the SOLE widget of their tab → fill it instead of
+   floating as an 11-row strip with ~20 dead rows beneath. Their plot canvas now
+   follows the widget size (see _FixedChart), so they fill width AND height. */
+EquityChart, LearningChart, #equity-chart, #learning-chart {
+    height: 1fr;
+    min-height: 10;
+    width: 1fr;
+    border: round $primary 40%;
+    border-title-color: $primary;
+    border-title-align: left;
+    background: $panel;
+    padding: 0 1;
+    margin: 0;
+}
+#price-chart.hidden, #equity-chart.hidden, #learning-chart.hidden {
+    display: none;
+}
+
+#market-scroll, #models-scroll {
+    height: 1fr;
+    min-height: 8;
+    scrollbar-size-vertical: 1;
+    scrollbar-gutter: stable;
+}
+
+#sidebar {
+    width: 36;
+    min-width: 30;
+    height: 1fr;
+    padding: 0 0 0 1;
+    layout: vertical;
+}
+
+/* Full-width journal docked under the main body — far more readable than the
+   old cramped corner of the right sidebar. */
+#log-bar {
+    height: 9;
+    min-height: 6;
+    layout: vertical;
+    padding: 0 1;
+}
+#log-bar.hidden { display: none; }
+
+/* One consistent frame for every dashboard panel: a rounded border whose title
+   sits in the border itself (Textual border_title), matching the charts. No
+   nested Rich Panel (which double-framed) and no separate label row above. */
+.panel-box {
+    border: round $primary 40%;
+    border-title-color: $primary;
+    border-title-align: left;
+    background: $panel;
+    padding: 0 1;
+    height: auto;
+    width: 1fr;
+}
+
+#scenario-bubbles {
+    height: auto;
+    max-height: 22;
+    overflow: hidden;
+    width: 1fr;
+    margin: 0;
+}
+
+#scenario-dist, #brain-panel {
+    height: auto;
+    min-height: 8;
+    width: 1fr;
+    margin: 0;
+}
+
+#brain-panel {
+    /* Hug content (was a fixed 12 rows that left blank lines under short
+       output) but stay bounded so it never crowds the scroll. */
+    max-height: 13;
+}
+
+#scenario-heatmap, #prob-models-panel {
+    height: auto;
+    width: 1fr;
+    margin: 0;
+}
+
+#metrics-panel {
+    /* Fill the sidebar so its rich, synthetic read-out occupies the whole
+       column instead of clipping to 16 rows and leaving a tall empty block
+       beneath (the main source of "blanc inutile" on every tab). */
+    height: 1fr;
+    min-height: 10;
+    overflow-y: auto;
+    margin: 0;
+}
+
+#trades-panel {
+    height: auto;
+    max-height: 10;
+    overflow-y: auto;
+    margin: 0;
+}
+
+#scenario-bubbles.hidden, #scenario-dist.hidden, #scenario-heatmap.hidden,
+#brain-panel.hidden, #prob-models-panel.hidden,
+#metrics-panel.hidden, #trades-panel.hidden {
+    display: none;
+}
+
+#top-scenarios {
+    height: auto;
+    max-height: 16;
+    min-height: 6;
+    overflow-y: auto;
+    margin: 0;
+}
+#top-scenarios.hidden { display: none; }
+
+#log {
+    height: 1fr;
+    min-height: 4;
+    border: round $primary 40%;
+    border-title-color: $primary;
+    border-title-align: left;
+    background: $panel;
+    scrollbar-size-vertical: 1;
+    padding: 0 1;
+}
+#log.hidden { display: none; }
+
+.prob-up { color: $success; }
+.prob-down { color: $error; }
+.prob-neutral { color: $warning; }
+.autonomy-high { color: $success; text-style: bold; }
+.autonomy-mid { color: $warning; }
+.autonomy-low { color: $error; }
+
+Screen.narrow #body { layout: vertical; }
+Screen.narrow #center { width: 100%; height: 1fr; min-height: 20; }
+Screen.narrow #sidebar { width: 100%; height: auto; max-height: 16; }
+Screen.narrow #log-bar { height: 8; }

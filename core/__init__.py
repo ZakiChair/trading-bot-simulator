@@ -1,0 +1,1 @@
+"""Core simulation engine: market, scenarios, portfolio, bot."""
