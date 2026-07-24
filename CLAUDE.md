@@ -23,8 +23,10 @@ them before touching `ml/rough_vol.py`, `core/hmm.py`, `core/conformal.py`,
 1-bar-ahead direction on real crypto data is ≈50/50 — no model here fabricates
 directional edge. The real, measured signals are magnitude (rough-vol), regime
 (HMM) and calibration (conformal); the bot acts on those. The directional tilt
-in the risk policy only opens behind a Wilson significance gate (structurally
-almost never). Don't reintroduce claims of directional edge or inflated backtest
+in the risk policy only opens behind a Wilson significance gate scored on the
+**directional calls only** (up/down subsample — overall accuracy can beat the
+majority baseline through mere flat-frequency/vol-timing skill, which carries
+no sign information; structurally the gate ≈ never opens). Don't reintroduce claims of directional edge or inflated backtest
 numbers; every new model must beat its baseline in `tests/measure_model.py`
 (walk-forward, no leak) or be reported honestly and left OFF by default.
 

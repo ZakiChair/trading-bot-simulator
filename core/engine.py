@@ -7,7 +7,12 @@ import numpy as np
 
 import dataclasses
 
-from config.market_config import DEFAULT_ASSET, DEFAULT_TIMEFRAME, WARMUP_BARS
+from config.market_config import (
+    DEFAULT_ASSET,
+    DEFAULT_TIMEFRAME,
+    TRAIN_HISTORY_BARS,
+    WARMUP_BARS,
+)
 from core.bot import BotState, TradingBot
 from core.decision import RiskPolicy
 from core.live_feed import LiveMarketFeed
@@ -383,13 +388,42 @@ class SimulationSession:
         self._record_snapshot()
         return True
 
+    def _oos_walk_start(self, sim) -> int:
+        """Première barre de la marche OOS (Live/Paper) sur un historique cache.
+
+        Ancrage par TIMESTAMP d'abord (``train_end_ts``) : depuis que le modèle
+        s'entraîne sur l'historique profond du cache, son ``train_end_step``
+        indexe le tableau d'ENTRAÎNEMENT — appliqué tel quel à la fenêtre de
+        session (plus courte), ce même index se faisait rogner en fin de série
+        et écrasait la marche OOS sur ~1 barre. ``searchsorted`` sur les
+        timestamps de la session donne la première barre strictement postérieure
+        à la zone touchée (train+val), quel que soit le tableau d'origine.
+        Replis : l'index (modèles historiques entraînés sur la fenêtre de
+        session) s'il tombe dans la série, sinon la queue ~20 %.
+        """
+        n = sim.n_bars
+        default = min(max(WARMUP_BARS, int(n * 0.8)), n - 2)
+        model = self.bot.candle_model
+        if model is None:
+            return max(0, default)
+        ts_end = int(getattr(model, "train_end_ts", -1) or -1)
+        sim_ts = getattr(sim, "timestamps", None)
+        if ts_end > 0 and sim_ts is not None and len(sim_ts) > 0:
+            idx = int(np.searchsorted(np.asarray(sim_ts), ts_end, side="right"))
+            if idx > 0:  # idx==0 ⇒ session entièrement postérieure déclarée… incohérent → repli
+                return max(0, min(max(WARMUP_BARS, idx), n - 2))
+        step_end = int(getattr(model, "train_end_step", -1))
+        if 0 <= step_end < n - 2:
+            return max(0, min(max(WARMUP_BARS, step_end + 1), n - 2))
+        return max(0, default)
+
     def _begin_live_session(self) -> None:
         """Start a fresh Live walk-forward: reset the scorecard and anchor the
         bot on the first candle to predict.
 
-        * **Simulation / cached history** — start the walk near the end of the
-          series (≈ last 20%, after the model's training split) so the bot
-          predicts candles it mostly hasn't trained on, then chains forward bar
+        * **Simulation / cached history** — start the walk strictly after the
+          model's touched bars (timestamp anchor; ≈ last 20% without a model) so
+          the bot predicts candles it hasn't trained on, then chains forward bar
           by bar until the data runs out.
         * **Live / paper feed** — anchor on the latest closed bar and predict the
           candle currently forming; new bars settle previous predictions.
@@ -399,17 +433,7 @@ class SimulationSession:
         if isinstance(sim, LiveMarketFeed):
             start = max(0, n - 1)
         else:
-            # Start strictly AFTER the bars the model was trained on, so the
-            # reliability note is measured on genuinely unseen candles. When the
-            # model carries its training end (train_end_step), anchor just past
-            # it; otherwise fall back to the out-of-sample tail (~last 20%).
-            model = self.bot.candle_model
-            train_end = int(getattr(model, "train_end_step", -1)) if model else -1
-            if train_end >= 0:
-                start = min(max(WARMUP_BARS, train_end + 1), n - 2)
-            else:
-                start = min(max(WARMUP_BARS, int(n * 0.8)), n - 2)
-            start = max(0, start)
+            start = self._oos_walk_start(sim)
         self._eval_start = start
         self.bot.market = sim.state_at(start)
         self.bot.live_eval.reset()
@@ -549,6 +573,12 @@ class SimulationSession:
             "fees": b.portfolio.fees_paid + b.portfolio.slippage_paid,
             "log": list(b.log[-8:]),
             "asset": self.asset,
+            # Fenêtre réellement rejouée + marqueur « fenêtre déjà vue » : sans
+            # eux, le wrap en fin d'historique rejouait la même fenêtre au bit
+            # près (épisode 5 ≡ épisode 1) en silence — un « résumé walk-forward »
+            # qui double-comptait une fenêtre sans le dire.
+            "window": (int(b.episode_start), int(b.market.step)),
+            "wrapped": bool(b.episode_wrapped),
         }
         risk = b.risk
         prev_model = b.candle_model
@@ -559,7 +589,8 @@ class SimulationSession:
         # WARMUP rendait chaque épisode identique au octet (audit UX).
         sim = self.bot_engine.simulator
         nxt_start = b.market.step
-        if nxt_start >= sim.n_bars - 60:
+        wrapped = nxt_start >= sim.n_bars - 60
+        if wrapped:
             nxt_start = WARMUP_BARS  # historique épuisé → on boucle
             risk.reset_state()  # saut discontinu → l'EWMA de l'ancienne marche ne vaut plus
         self.bot = self.bot_engine.new_episode(
@@ -571,6 +602,14 @@ class SimulationSession:
             use_model=b.use_model,
             start_step=nxt_start,
         )
+        if wrapped:
+            # Le rejeu d'une fenêtre déjà vue doit s'annoncer : il est marqué
+            # sur l'épisode (stats["wrapped"]) et au journal.
+            self.bot.episode_wrapped = True
+            self.bot.log_msg(
+                "⟲ Historique épuisé — l'épisode repart au début de la fenêtre "
+                "(barres déjà rejouées : PnL non cumulable avec les segments précédents)."
+            )
         _attach_exchange(self.bot.portfolio, self.exchange_client)
         self.bot.mode = self.run_mode.value
         self._record_snapshot()
@@ -579,6 +618,47 @@ class SimulationSession:
     # ------------------------------------------------------------------ #
     # Supervised next-candle model: gradient-descent training + live mode
     # ------------------------------------------------------------------ #
+    def _training_history(self) -> tuple[np.ndarray, np.ndarray | None, str]:
+        """``(prices, timestamps, note)`` pour entraîner le modèle de bougie.
+
+        La session ne rejoue que ``DEFAULT_LIMIT`` barres (coût TUI), mais le
+        cache du même (actif, timeframe) en détient bien plus (13k+ en BTC 1h) :
+        entraîner sur la fenêtre d'affichage laissait ~90 % de l'historique au
+        tiroir (~1 270 échantillons au lieu de ~5 000). On recharge donc
+        l'historique PROFOND (``TRAIN_HISTORY_BARS``), accepté seulement s'il
+        (1) provient d'une source réelle (jamais de mélange avec du synthétique),
+        (2) se termine sur la MÊME dernière barre close que la session (même
+        flux, pas de désalignement réseau) et (3) est réellement plus long.
+        Sinon : repli silencieux sur les barres de la session — le comportement
+        historique. La ``note`` non vide est à journaliser.
+        """
+        sim = self.bot_engine.simulator
+        raw = getattr(sim, "prices", None)
+        prices = (np.asarray(raw, dtype=np.float64)
+                  if raw is not None else np.array([], dtype=np.float64))
+        ts = getattr(sim, "timestamps", None)
+        src = str(getattr(sim, "source", "") or self.data_source)
+        if not src.startswith(("cache", "ccxt", "live")):
+            return prices, ts, ""
+        if ts is None or len(ts) == 0:
+            return prices, ts, ""
+        try:
+            from data.loader import DataLoader
+
+            df, _src = DataLoader().load(self.asset, self.timeframe,
+                                         limit=TRAIN_HISTORY_BARS)
+            deep_ts = df.index.as_unit("ms").astype(np.int64).to_numpy()
+            deep_p = df["close"].to_numpy(dtype=np.float64)
+        except Exception:
+            return prices, ts, ""
+        if len(deep_p) <= len(prices) or len(deep_ts) != len(deep_p):
+            return prices, ts, ""
+        if int(deep_ts[-1]) != int(np.asarray(ts)[-1]):
+            return prices, ts, ""
+        note = (f"🗄 Entraînement sur l'historique profond du cache : "
+                f"{len(deep_p)} barres (fenêtre de session : {len(prices)}).")
+        return deep_p, deep_ts, note
+
     def train_model(self, epochs: int = 400, lr: float = 0.5, progress=None) -> TrainReport:
         """Train the next-candle model by gradient descent on the loaded history.
 
@@ -588,9 +668,12 @@ class SimulationSession:
         predictions immediately drive the bubbles.
         """
         self._leave_paper()  # train the real bot, never a transient paper copy
-        prices = getattr(self.bot_engine.simulator, "prices", None)
+        train_p, train_ts, deep_note = self._training_history()
+        if deep_note:
+            self.bot.log_msg(deep_note)
         model, report = train_candle_model(
-            prices,
+            train_p,
+            timestamps=train_ts,
             symbol=self.asset,
             timeframe=self.timeframe,
             epochs=epochs,
@@ -718,13 +801,7 @@ class SimulationSession:
         if forward:
             start = max(0, n - 1)
         else:
-            model = self.bot.candle_model
-            train_end = int(getattr(model, "train_end_step", -1)) if model else -1
-            if train_end >= 0:
-                start = min(max(WARMUP_BARS, train_end + 1), n - 2)
-            else:
-                start = min(max(WARMUP_BARS, int(n * 0.8)), n - 2)
-            start = max(0, start)
+            start = self._oos_walk_start(sim)
         self._paper_forward = forward
         self._paper_start = start
         self._paper_started = True

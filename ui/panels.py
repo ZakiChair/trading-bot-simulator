@@ -580,12 +580,19 @@ def _consensus_block(
         filled = int(round(mass * width))
         filled = max(0, min(width, filled))
         bar = "█" * filled + "░" * (width - filled)
-        marker = "◀ probable" if direction == top_dir else ""
+        # Une courte tête (marge top-2 < 5 pts) n'est pas un appel assumé : le
+        # marqueur le dit, au lieu de présenter un quasi-tirage comme « probable ».
+        if direction != top_dir:
+            marker = ""
+        elif forecast.low_confidence:
+            marker = f"◀ courte tête (Δ{forecast.consensus_margin:.0%})"
+        else:
+            marker = "◀ probable"
         block.append(f"  {_DIR_ARROW[direction]} {label} ", style=f"bold {color}")
         block.append(bar, style=color)
         block.append(f" {mass:4.0%} ", style=f"bold {color}")
         if marker:
-            block.append(marker, style="bold")
+            block.append(marker, style="bold" if marker == "◀ probable" else "dim")
         block.append("\n")
     return block
 

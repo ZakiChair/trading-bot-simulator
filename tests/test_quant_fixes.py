@@ -93,9 +93,18 @@ def test_wilson_significance_gate():
 
     ev.n_eval, ev.n_correct = 80, 60
     ev.realized_counts = {"up": 40, "flat": 20, "down": 20}  # baseline 50%
+    # Depuis la revue 2026-07-24 la porte/l'étiquette « edge directionnel » ne
+    # se jugent que sur les appels DIRECTIONNELS (le skill global peut venir de
+    # la seule fréquence des flats = timing de vol, sans signe).
+    ev.n_dir, ev.n_dir_correct = 80, 60
+    ev.dir_realized_counts = {"up": 40, "flat": 0, "down": 40}  # majorité 50 %
     label, _style, needs = ev.grade()
     assert not needs and "fiable" in label, label  # real significant edge
-    print("✓ RF5 Wilson significance gate works")
+    # Le même hit global SANS appels directionnels ne doit plus suffire.
+    ev.n_dir = ev.n_dir_correct = 0
+    ev.dir_realized_counts = {"up": 0, "flat": 0, "down": 0}
+    assert ev.significant_edge is False
+    print("✓ RF5 Wilson significance gate works (directional calls only)")
 
 
 def test_strict_oos_start_uses_train_end():
@@ -108,10 +117,20 @@ def test_strict_oos_start_uses_train_end():
         # toggle predict mode off→on to (re)begin a fresh live session
         s.set_predict_mode(False)
         s.set_predict_mode(True)
-        assert s._eval_start > model.train_end_step or s._eval_start >= int(model.train_end_step), (
-            s._eval_start, model.train_end_step,
-        )
-        print(f"✓ RF3 live walk starts OOS (start {s._eval_start} > train_end {model.train_end_step})")
+        sim = s.bot_engine.simulator
+        if model.train_end_ts > 0 and sim.timestamps is not None:
+            # Entraînement sur historique profond : l'index d'entraînement ne se
+            # transpose pas dans la fenêtre de session — l'invariant OOS se
+            # vérifie en TEMPS (première barre strictement après la zone touchée).
+            assert int(sim.timestamps[s._eval_start]) > model.train_end_ts, (
+                s._eval_start, model.train_end_ts,
+            )
+            print(f"✓ RF3 live walk starts OOS (ts[{s._eval_start}] > train_end_ts)")
+        else:
+            assert s._eval_start > model.train_end_step, (
+                s._eval_start, model.train_end_step,
+            )
+            print(f"✓ RF3 live walk starts OOS (start {s._eval_start} > train_end {model.train_end_step})")
 
 
 if __name__ == "__main__":

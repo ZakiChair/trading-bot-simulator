@@ -21,9 +21,11 @@ projet savent faire — **tenir un budget de risque** :
   est le seul état latent persistant et séparable mesuré, cf. RAPPORT_REFONTE §2) ;
 * ``tilt`` — inclinaison directionnelle **fermée par défaut** : elle ne s'ouvre
   que si l'évaluateur Wilson (``core/live_eval.py``) atteste d'un edge
-  directionnel *significatif* (borne inférieure IC95 > baseline). Sur ce
-  substrat c'est ≈ jamais — c'est le point : l'abstention directionnelle est
-  codée, pas espérée.
+  directionnel *significatif* — mesuré sur les seuls appels up/down (borne
+  inférieure IC95 du hit rate > majorité réalisée sur ces mêmes barres ; un
+  test sur l'accuracy globale était passable par du simple timing de vol, une
+  compétence sans signe). Sur ce substrat c'est ≈ jamais — c'est le point :
+  l'abstention directionnelle est codée, pas espérée.
 
 Le rebalancement est **conscient des coûts** : une bande de non-trade évite de
 payer frais+slippage pour des micro-ajustements. Chaque décision expose sa trace

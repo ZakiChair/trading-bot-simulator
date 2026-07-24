@@ -249,6 +249,12 @@ class CandleModel:
     # used for *training*. The live walk-forward must start strictly after this
     # so its "fiabilité" is measured on genuinely unseen candles. -1 = unknown.
     train_end_step: int = -1
+    # UTC-ms timestamp of that same last touched bar. The robust OOS anchor:
+    # ``train_end_step`` indexes the TRAINING array, which since the deep-history
+    # fix can be longer than the session's display window — an index into one is
+    # meaningless in the other (it silently clamped the Live walk to a ~1-bar
+    # tail). Sessions anchor by timestamp when this is set. -1 = unknown.
+    train_end_ts: int = -1
     loss_history: list[float] = field(default_factory=list)
     val_acc_history: list[float] = field(default_factory=list)
 
@@ -408,6 +414,7 @@ class CandleModel:
                     str(self.train_end_step),
                     str(FEATURE_VERSION),
                     f"{self.temperature:.6f}",
+                    str(self.train_end_ts),
                 ]
             ),
             loss_history=np.asarray(self.loss_history, dtype=np.float64),
@@ -433,6 +440,7 @@ class CandleModel:
                 f"vs v{FEATURE_VERSION}/{N_FEATURES}) — retrain required"
             )
         temperature = float(meta[10]) if len(meta) > 10 else 1.0
+        train_end_ts = int(meta[11]) if len(meta) > 11 else -1
         return cls(
             symbol=str(meta[0]),
             timeframe=str(meta[1]),
@@ -449,6 +457,7 @@ class CandleModel:
             dir_threshold=dir_thr,
             temperature=temperature,
             train_end_step=train_end,
+            train_end_ts=train_end_ts,
             loss_history=list(data["loss_history"]),
             val_acc_history=list(data["val_acc_history"]),
         )
@@ -521,6 +530,7 @@ def _fit_temperature(val_logits: np.ndarray, yva: np.ndarray) -> float:
 def train_candle_model(
     prices: np.ndarray,
     *,
+    timestamps: np.ndarray | None = None,
     symbol: str = "",
     timeframe: str = "1h",
     epochs: int = 400,
@@ -545,6 +555,12 @@ def train_candle_model(
     sur ces mêmes barres, comme avant, sur-estimait la fiabilité (audit
     2026-07). ``train_end_step`` pointe désormais la fin de la zone touchée
     (train+val) ; la marche Live démarre strictement après, sur la queue vierge.
+
+    ``timestamps`` (UTC ms, alignés sur ``prices``) : quand fournis, la fin de
+    la zone touchée est aussi mémorisée en temps absolu (``train_end_ts``) —
+    l'ancrage OOS robuste quand l'historique d'entraînement (cache profond) est
+    plus long que la fenêtre de session (un index ne se transpose pas d'un
+    tableau à l'autre).
 
     ``balance_classes`` defaults to **False**: 1-bar direction has no real edge
     (balanced accuracy ≈ random on real data), so up-weighting the minority
@@ -579,6 +595,12 @@ def train_candle_model(
     # l'early stopping et à la température = sélection de modèle). La marche
     # Live/Paper doit commencer strictement après ``cut - 1``.
     train_end_step = cut - 1
+    train_end_ts = -1
+    if timestamps is not None and len(timestamps) == len(p_full) and cut >= 1:
+        try:
+            train_end_ts = int(timestamps[cut - 1])
+        except (TypeError, ValueError):
+            train_end_ts = -1
 
     mean = Xtr.mean(axis=0)
     std = Xtr.std(axis=0)
@@ -680,6 +702,7 @@ def train_candle_model(
         temperature=temperature,
         dir_threshold=thr,
         train_end_step=train_end_step,
+        train_end_ts=train_end_ts,
         loss_history=list(report.loss_history),
         val_acc_history=list(report.val_acc_history),
     )

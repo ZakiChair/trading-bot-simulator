@@ -111,6 +111,19 @@ class LiveEvaluator:
     realized_counts: dict[str, int] = field(
         default_factory=lambda: {"up": 0, "flat": 0, "down": 0}
     )
+    # Sous-échantillon DIRECTIONNEL : les barres où le modèle a réellement
+    # appelé un signe (up/down). La porte du tilt (significant_edge) ne se juge
+    # que là-dessus — l'accuracy globale, elle, peut battre la baseline par pur
+    # skill de FRÉQUENCE (prédire « flat » au bon taux = timing de vol, aucune
+    # information de signe) : mesuré 2026-07-24, l'ancienne porte s'ouvrait sur
+    # ~51 % d'une marche OOS de 2000 barres alors que E[r|classe prédite] était
+    # plat sur les trois classes. Un test global déverrouillait donc un tilt
+    # directionnel pour une compétence qui n'a rien de directionnel.
+    n_dir: int = 0
+    n_dir_correct: int = 0
+    dir_realized_counts: dict[str, int] = field(
+        default_factory=lambda: {"up": 0, "flat": 0, "down": 0}
+    )
     history: list[SettledPrediction] = field(default_factory=list)
     finalized: bool = False
     # Distribution-free conformal calibrator for the next-bar return interval.
@@ -130,6 +143,9 @@ class LiveEvaluator:
         self.abs_err_sum = 0.0
         self.brier_sum = 0.0
         self.realized_counts = {"up": 0, "flat": 0, "down": 0}
+        self.n_dir = 0
+        self.n_dir_correct = 0
+        self.dir_realized_counts = {"up": 0, "flat": 0, "down": 0}
         self.history = []
         self.finalized = False
         self.conformal = ConformalCalibrator(target_alpha=0.1, window=300, gamma=0.01)
@@ -213,6 +229,10 @@ class LiveEvaluator:
         self.n_correct += int(correct)
         self.abs_err_sum += abs(realized_ret - p.return_pct)
         self.realized_counts[realized_dir] += 1
+        if p.direction != "flat":
+            self.n_dir += 1
+            self.n_dir_correct += int(correct)
+            self.dir_realized_counts[realized_dir] += 1
         # Multiclass Brier of the predicted direction mass vs the realised one-hot
         # ([P_up,P_flat,P_down] order). Only meaningful when the forecast carried
         # real probabilities (model/Markov driven); a zero vector contributes the
@@ -283,14 +303,38 @@ class LiveEvaluator:
         return wilson_lower_bound(self.n_correct, self.n_eval)
 
     @property
-    def significant_edge(self) -> bool:
-        """True only when the *lower bound* of accuracy beats the baseline.
+    def dir_accuracy(self) -> float:
+        """Hit rate sur les seuls appels directionnels (prédiction up/down)."""
+        return self.n_dir_correct / self.n_dir if self.n_dir else 0.0
 
-        This is the honest "the edge is real, not luck" test: even the
-        pessimistic end of the confidence interval must clear the always-predict-
-        majority floor, on a large-enough sample.
+    @property
+    def dir_baseline(self) -> float:
+        """Toujours-prédire-la-classe-majoritaire, restreint aux MÊMES barres
+        que les appels directionnels — la comparaison reste à échantillon égal,
+        donc sans biais de sélection si le modèle choisit « quand » parler."""
+        if self.n_dir == 0:
+            return 0.0
+        return max(self.dir_realized_counts.values()) / self.n_dir
+
+    @property
+    def dir_acc_lower_bound(self) -> float:
+        """Wilson 95% lower bound de l'accuracy des appels directionnels."""
+        return wilson_lower_bound(self.n_dir_correct, self.n_dir)
+
+    @property
+    def significant_edge(self) -> bool:
+        """True seulement quand le skill *directionnel* est significatif : sur
+        les seules barres où le modèle a appelé un signe (≥ ``_MIN_EVAL``), la
+        borne inférieure IC95 de son hit rate doit battre la majorité réalisée
+        sur ces mêmes barres.
+
+        L'ancien test (accuracy GLOBALE vs baseline majoritaire, flats compris)
+        était passable par du skill de fréquence de classe — savoir quand la
+        barre sera calme est du timing de volatilité, pas du signe — et
+        déverrouillait pourtant le tilt directionnel de la politique de risque
+        (``core/decision.py``). La porte ne juge plus que ce qu'elle déverrouille.
         """
-        return self.n_eval >= _MIN_EVAL and self.acc_lower_bound > self.baseline
+        return self.n_dir >= _MIN_EVAL and self.dir_acc_lower_bound > self.dir_baseline
 
     @property
     def mean_abs_error(self) -> float:
@@ -325,8 +369,9 @@ class LiveEvaluator:
         * **couverture** (45 %) — l'intervalle conforme 90 % couvre-t-il ~90 % ?
         * **calibration** (35 %) — Brier vs la climatologie (un modèle calibré
           sans edge fait ≈ la climatologie → 0.5 ; mieux → plus ; pire → 0) ;
-        * **edge directionnel** (20 %) — le bonus Wilson, presque toujours 0
-          ici, et c'est normal.
+        * **edge directionnel** (20 %) — le bonus Wilson, mesuré sur les seuls
+          appels directionnels (le même sous-échantillon que la porte du tilt),
+          presque toujours 0 ici, et c'est normal.
 
         Un modèle honnête et bien calibré tourne autour de 55-75 ; un modèle
         mal calibré chute sous 45 — et LÀ, ré-entraîner aide vraiment.
@@ -346,7 +391,8 @@ class LiveEvaluator:
             cal_term = max(0.0, min(1.0, 0.5 + 2.5 * skill))
         else:
             cal_term = 0.5
-        sig_edge = max(0.0, self.acc_lower_bound - self.baseline)
+        sig_edge = (max(0.0, self.dir_acc_lower_bound - self.dir_baseline)
+                    if self.n_dir else 0.0)
         edge_term = max(0.0, min(1.0, sig_edge / 0.15))
         return round(100.0 * (0.45 * cov_term + 0.35 * cal_term + 0.20 * edge_term), 1)
 
@@ -359,7 +405,9 @@ class LiveEvaluator:
         en boucle était inatteignable par construction)."""
         if self.n_eval < _MIN_EVAL:
             return f"⏳ échantillon insuffisant ({self.n_eval}/{_MIN_EVAL})", "yellow", True
-        lb_edge = self.acc_lower_bound - self.baseline
+        # Edge directionnel = sur les seuls appels up/down (cf. significant_edge).
+        lb_edge = (self.dir_acc_lower_bound - self.dir_baseline
+                   if self.n_dir >= _MIN_EVAL else 0.0)
         if lb_edge >= 0.05:
             return "🟢 fiable (edge directionnel significatif)", "green", False
         note = self.reliability_note
@@ -417,7 +465,7 @@ class LiveEvaluator:
             else "→ calibration/couverture au rendez-vous — l'absence d'edge "
                  "directionnel est structurelle, pas un défaut d'entraînement."
         )
-        return [
+        lines = [
             "═══ Bilan Live — note de fiabilité ═══",
             (
                 f"[{style}]Note {self.reliability_note:.0f}/100 — {label}[/] · "
@@ -428,8 +476,15 @@ class LiveEvaluator:
                 f"vs baseline {self.baseline:.1%} (edge {self.edge:+.1%}) · "
                 f"erreur moy. {self.mean_abs_error:.2%} · Brier {self.mean_brier:.3f}"
             ),
-            (
-                f"Réel observé ↑{rc['up']} ●{rc['flat']} ↓{rc['down']}  {advice}"
-            ),
         ]
+        if self.n_dir:
+            # La porte du tilt ne regarde que ce sous-échantillon (up/down).
+            lines.append(
+                f"Appels directionnels {self.n_dir}/{self.n_eval} : justes "
+                f"{self.dir_accuracy:.1%} (IC95 ≥ {self.dir_acc_lower_bound:.1%}) "
+                f"vs majorité {self.dir_baseline:.1%} — porte du tilt "
+                f"{'OUVERTE' if self.significant_edge else 'fermée'}"
+            )
+        lines.append(f"Réel observé ↑{rc['up']} ●{rc['flat']} ↓{rc['down']}  {advice}")
+        return lines
 

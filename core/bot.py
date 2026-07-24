@@ -79,6 +79,8 @@ class BotState:
     scenario_engine: ScenarioEngine
     current_bundle: ScenarioBundle | None = None
     episode: int = 1
+    episode_start: int = 0     # barre d'ancrage de l'épisode (fenêtre affichée)
+    episode_wrapped: bool = False  # True = fenêtre rejouée (historique épuisé)
     running: bool = False
     paused: bool = False
     mode: str = "train"  # run-mode label: train | paper | live (see core.run_mode)
@@ -131,6 +133,7 @@ class TradingBot:
         return BotState(
             market=state,
             market_sim=sim,
+            episode_start=start,
             portfolio=Portfolio(initial_cash=self.initial_cash, cash=self.initial_cash),
             risk=risk or RiskPolicy(),
             scenario_engine=ScenarioEngine(

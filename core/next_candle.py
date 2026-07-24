@@ -65,6 +65,26 @@ class NextCandleForecast:
         """``JJ/MM HH:MM`` of the predicted candle (or ``—`` if unknown)."""
         return format_ts(self.target_ts)
 
+    @property
+    def consensus_margin(self) -> float:
+        """Écart entre la 1ʳᵉ et la 2ᵉ masse calibrée — 0 = pile équiprobable."""
+        m = sorted((self.prob_up, self.prob_flat, self.prob_down), reverse=True)
+        return float(m[0] - m[1])
+
+    @property
+    def low_confidence(self) -> bool:
+        """True quand l'argmax n'est qu'une courte tête (marge top-2 < 5 pts).
+
+        Sur ce substrat martingale les masses gravitent autour de ⅓/⅓/⅓ (marge
+        moyenne mesurée ≈ 5 pts, 2026-07-24) : afficher « NEUTRE (P=35 %) » sans
+        qualificatif faisait passer un quasi-tirage au sort pour un appel assumé
+        — et NEUTRE sortait 46 % du temps pour 35 % réalisé, non parce que le
+        modèle « croit » au neutre mais parce que l'argmax départage des masses
+        presque égales. La règle de décision reste l'argmax (optimale pour le
+        hit rate, et c'est elle que score la fiabilité) ; seul l'AFFICHAGE dit
+        désormais quand l'appel est faible."""
+        return self.consensus_margin < 0.05
+
     def candle_line(self) -> str:
         """One line naming the candle being predicted + its date/time."""
         n = f"#{self.target_step}" if self.target_step >= 0 else ""
@@ -81,9 +101,13 @@ class NextCandleForecast:
         top = max(masses, key=masses.get)  # type: ignore[arg-type]
         tag = "🧠 modèle" if self.model_driven else "📊 stat"
         n = f"#{self.target_step} " if self.target_step >= 0 else ""
+        weak = (
+            f", Δ{self.consensus_margin:.0%} — quasi équiprobable"
+            if self.low_confidence else ""
+        )
         return (
             f"🔮 Bougie {n}[{self.timeframe}·{tag}] {self.target_dt} → "
-            f"[{_DIR_STYLE[top]}]{_DIR_FR[top]}[/] (P={masses[top]:.0%}) | "
+            f"[{_DIR_STYLE[top]}]{_DIR_FR[top]}[/] (P={masses[top]:.0%}{weak}) | "
             f"P(↑/●/↓)={self.prob_up:.0%}/{self.prob_flat:.0%}/{self.prob_down:.0%} | "
             f"E[r]={self.expected_return:+.3%} | "
             f"Markov {self.markov_from}→{self.markov_to} ({self.markov_transition_prob:.1%}) | "

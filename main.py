@@ -84,12 +84,12 @@ def run_cli(
     for ep in range(1, episodes + 1):
         session.bot.episode = ep
         stats = session.train_episode(steps=steps)
-        results.append(
-            (stats["episode"], stats["pnl"], stats["realized_vol"],
-             stats["avg_exposure"], stats["trades"], stats["fees"])
-        )
+        results.append(stats)
+        w0, w1 = stats["window"]
+        wrap = " ↻" if stats["wrapped"] else ""
         console.print(
-            f"  Épisode {stats['episode']:2d} | PnL {stats['pnl']:+8,.0f} | "
+            f"  Épisode {stats['episode']:2d} | barres {w0}–{w1}{wrap} | "
+            f"PnL {stats['pnl']:+8,.0f} | "
             f"vol réalisée {stats['realized_vol']:5.0%} (cible {stats['target_vol']:.0%}) | "
             f"expo moy. {stats['avg_exposure']:4.0%} | Trades {stats['trades']} | "
             f"coûts {stats['fees']:,.0f}$"
@@ -97,21 +97,29 @@ def run_cli(
 
     table = Table(title="Résumé replay (politique de budget de risque)")
     table.add_column("Épisode")
+    table.add_column("Fenêtre (barres)")
     table.add_column("PnL", justify="right")
     table.add_column("Vol réalisée", justify="right")
     table.add_column("Expo moy.", justify="right")
     table.add_column("Trades", justify="right")
     table.add_column("Coûts $", justify="right")
-    for row in results:
+    for st in results:
+        w0, w1 = st["window"]
         table.add_row(
-            str(row[0]),
-            f"{row[1]:+,.0f}",
-            f"{row[2]:.0%}",
-            f"{row[3]:.0%}",
-            str(row[4]),
-            f"{row[5]:,.0f}",
+            f"{st['episode']}{' ↻' if st['wrapped'] else ''}",
+            f"{w0}–{w1}",
+            f"{st['pnl']:+,.0f}",
+            f"{st['realized_vol']:.0%}",
+            f"{st['avg_exposure']:.0%}",
+            str(st["trades"]),
+            f"{st['fees']:,.0f}",
         )
     console.print(table)
+    if any(st["wrapped"] for st in results):
+        console.print(
+            "[yellow]↻ historique épuisé : cet épisode rejoue une fenêtre déjà "
+            "parcourue (mêmes barres qu'un segment précédent — ne pas cumuler).[/]"
+        )
 
     console.print(
         "\n[dim]Rappel honnête : la direction 1 barre est ≈50/50 — le job du bot est de "
@@ -165,6 +173,10 @@ def run_train(
     if not rep.n_train:
         console.print("[yellow]Historique insuffisant pour entraîner le modèle.[/]")
         return 1
+    for line in reversed(session.bot.log[-10:]):
+        if line.startswith("🗄"):  # profondeur d'historique réellement utilisée
+            console.print(f"  [dim]{line}[/]")
+            break
 
     edge = rep.val_accuracy - rep.val_majority
     edge_style = "green" if edge > 0 else "yellow"
